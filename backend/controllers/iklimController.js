@@ -69,11 +69,21 @@ const buildQuery = ({ startDate, endDate, stasiun }) => {
   return query;
 };
 
+// Zona waktu selalu disebut eksplisit. Server hosting (Vercel, VPS) umumnya
+// berjalan dalam UTC, sehingga tanpa ini jam unggah tampil 7 jam lebih awal.
+// - Waktu kejadian (unggah, unduh) ditampilkan dalam WIB.
+// - TANGGAL pengukuran disimpan sebagai tengah malam UTC, jadi diformat dalam
+//   UTC agar tidak bergeser sehari di zona waktu mana pun.
 const tanggalIndonesia = () =>
   new Date().toLocaleString("id-ID", {
     weekday: "long", year: "numeric", month: "long",
     day: "numeric", hour: "2-digit", minute: "2-digit",
+    timeZone: "Asia/Jakarta",
   });
+
+const hariIniWIB = () => new Date().toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" });
+
+const tanggalUkur = (d) => new Date(d).toLocaleDateString("id-ID", { timeZone: "UTC" });
 
 // ---------------------------------------------------------------- upload
 
@@ -208,8 +218,8 @@ exports.uploadExcel = [
         stasiun: namaStasiun,
         tanggalUpload: tanggalIndonesia(),
         rentangData: {
-          dari: new Date(Math.min(...waktu)).toLocaleDateString("id-ID"),
-          sampai: new Date(Math.max(...waktu)).toLocaleDateString("id-ID"),
+          dari: tanggalUkur(Math.min(...waktu)),
+          sampai: tanggalUkur(Math.max(...waktu)),
         },
         ringkasan: {
           totalBaris: rows.length,
@@ -478,7 +488,7 @@ exports.exportPDF = async (req, res) => {
          15, 100, { width: lebarHalaman, align: "center" }
        )
        .text(
-         `Diunduh: ${new Date().toLocaleDateString("id-ID")}`,
+         `Diunduh: ${hariIniWIB()}`,
          15, 112, { width: lebarHalaman, align: "center" }
        );
 
@@ -522,7 +532,7 @@ exports.exportPDF = async (req, res) => {
 
       const row = [
         String(index + 1),
-        new Date(item.TANGGAL).toLocaleDateString("id-ID"),
+        tanggalUkur(item.TANGGAL),
         item.NAMA_STASIUN,
         ...KODE_FIELD.map((k) => formatRingkas(item[k])),
       ];
