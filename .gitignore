@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+build/
+
+# Uploaded / temporary data files
+backend/file/
+backend/uploads/
+
+# Cadangan database (memuat hash password)
+backend/backup/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Editor & OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

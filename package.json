@@ -1,0 +1,38 @@
+{
+  "name": "Project_BRMP",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd backend && node server.js",
+    "client": "cd frontend && npm run dev",
+    "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
+    "build": "cd frontend && npm run build",
+    "lint": "cd frontend && npm run lint",
+    "create-admin": "cd backend && node scripts/createAdmin.js",
+    "cek-koneksi": "cd backend && node scripts/cekKoneksi.js",
+    "backup": "cd backend && node scripts/backupData.js",
+    "migrasi": "cd backend && node scripts/migrasiKeAtlas.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "exceljs": "^4.4.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.7.0",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.15.0",
+    "multer": "^2.0.0",
+    "pdfkit": "^0.17.1",
+    "rate-limit-redis": "^6.0.1",
+    "redis": "^6.2.1",
+    "xlsx": "^0.18.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

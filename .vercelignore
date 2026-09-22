@@ -1,0 +1,17 @@
+# Deploy lewat CLI mengunggah isi folder lokal. Tanpa daftar ini rahasia dan
+# cadangan database ikut terunggah ke Vercel.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+backend/backup/
+backend/file/
+backend/uploads/
+
+node_modules/
+**/node_modules/
+frontend/dist/
+*.log
