@@ -9,13 +9,12 @@ const {
   formatRingkas, KOP_SURAT,
 } = require("../lib/iklimFormat");
 const { periksaSemua, periksaBaris, RENTANG } = require("../lib/validasiIklim");
+const Stasiun = require("../models/stasiunModel");
+const { normalisasiNama, daftarStasiun } = require("../lib/stasiun");
 
-const STASIUN_VALID = [
-  "AWS KP PACET",
-  "AWS KP PAKUWON",
-  "AWS KP CIMANGGU",
-  "AWS KP MUARA",
-];
+// Kolom opsional di sheet data. Bila ada, tiap baris membawa nama stasiunnya
+// sendiri sehingga satu berkas bisa berisi banyak stasiun.
+const KOLOM_STASIUN = "Stasiun";
 
 // ---------------------------------------------------------------- helpers
 
@@ -62,8 +61,9 @@ const buildQuery = ({ startDate, endDate, stasiun }) => {
   }
 
   if (stasiun) {
-    // Escape dulu agar input user tidak bisa jadi pola regex liar
-    query.NAMA_STASIUN = { $regex: new RegExp(escapeRegex(stasiun), "i") };
+    // Escape dulu agar input user tidak bisa jadi pola regex liar. Dijangkar
+    // ^...$ supaya "AWS KAB. BANDUNG" tidak ikut menarik "AWS KAB. BANDUNG BARAT".
+    query.NAMA_STASIUN = { $regex: new RegExp(`^${escapeRegex(stasiun.trim())}$`, "i") };
   }
 
   return query;
@@ -84,6 +84,52 @@ const tanggalIndonesia = () =>
 const hariIniWIB = () => new Date().toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" });
 
 const tanggalUkur = (d) => new Date(d).toLocaleDateString("id-ID", { timeZone: "UTC" });
+
+// Baris header sheet, dibaca terpisah dari data karena objek hasil
+// sheet_to_json tidak memuat kolom yang selnya kosong di baris itu.
+const bacaHeader = (sheet) => {
+  const rentang = xlsx.utils.decode_range(sheet["!ref"] || "A1");
+  rentang.e.r = rentang.s.r;
+  return (xlsx.utils.sheet_to_json(sheet, { header: 1, range: rentang })[0] || [])
+    .map((h) => String(h ?? ""));
+};
+
+const angkaDalam = (raw, min, max) => {
+  const n = parseAngka(raw);
+  return n !== null && n >= min && n <= max ? n : undefined;
+};
+
+// Metadata lokasi per stasiun, dari sheet "Stasiun" bila ada, lalu dilengkapi
+// kolom lokasi di sheet data untuk stasiun yang tidak tercantum di sana.
+// Field yang kosong atau tidak masuk akal tidak diikutkan, agar tidak
+// menimpa metadata yang sudah tersimpan.
+const bacaMetadataStasiun = (workbook, rows) => {
+  const namaSheet = workbook.SheetNames
+    .slice(1)
+    .find((n) => n.trim().toLowerCase() === "stasiun");
+  const sumber = [
+    ...(namaSheet ? xlsx.utils.sheet_to_json(workbook.Sheets[namaSheet]) : []),
+    ...rows,
+  ];
+
+  const meta = new Map();
+  sumber.forEach((r) => {
+    const nama = normalisasiNama(r[KOLOM_STASIUN]);
+    if (!nama || meta.has(nama)) return;
+
+    const m = {
+      LABEL: String(r[KOLOM_STASIUN]).trim().replace(/\s+/g, " "),
+      WILAYAH: r.Wilayah ? String(r.Wilayah).trim() : undefined,
+      TIPE: r.Tipe ? String(r.Tipe).trim() : undefined,
+      LINTANG: angkaDalam(r.Lintang, -90, 90),
+      BUJUR: angkaDalam(r.Bujur, -180, 180),
+      ELEVASI: angkaDalam(r.Elevasi_m ?? r.Elevasi, -500, 9000),
+    };
+    Object.keys(m).forEach((k) => m[k] === undefined && delete m[k]);
+    meta.set(nama, m);
+  });
+  return meta;
+};
 
 // ---------------------------------------------------------------- upload
 
@@ -119,20 +165,9 @@ exports.uploadExcel = [
       if (!req.file) {
         return res.status(400).json({ error: "File tidak ditemukan" });
       }
-      if (!req.body.station) {
-        return res.status(400).json({ error: "Nama stasiun wajib dipilih" });
-      }
-
-      const namaStasiun = req.body.station.trim().toUpperCase();
-      if (!STASIUN_VALID.includes(namaStasiun)) {
-        return res.status(400).json({
-          error: `Stasiun tidak dikenal: ${req.body.station}`,
-          stasiunValid: STASIUN_VALID,
-        });
-      }
-
       const workbook = xlsx.read(req.file.buffer, { type: "buffer", cellDates: true });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const header = bacaHeader(sheet);
       const rows = xlsx.utils.sheet_to_json(sheet);
 
       if (!rows.length) {
@@ -140,37 +175,89 @@ exports.uploadExcel = [
       }
 
       const wajib = ["Date", "TN", "TX", "TM"];
-      const hilang = wajib.filter((c) => !(c in rows[0]));
+      const hilang = wajib.filter((c) => !header.includes(c));
       if (hilang.length) {
         return res.status(400).json({
           error: `Kolom wajib tidak ditemukan: ${hilang.join(", ")}`,
-          kolomYangDitemukan: Object.keys(rows[0]),
+          kolomYangDitemukan: header,
         });
       }
 
-      // Pisahkan baris valid dari yang tanggalnya rusak, lalu laporkan
+      // Sumber nama stasiun: kolom "Stasiun" di berkas bila ada (boleh banyak
+      // stasiun, yang belum terdaftar ikut didaftarkan), selain itu pilihan
+      // dropdown yang harus merujuk stasiun terdaftar.
+      const terdaftar = new Set((await daftarStasiun()).map((s) => s.NAMA));
+      const pakaiKolom = header.includes(KOLOM_STASIUN);
+      let namaPilihan = null;
+
+      if (!pakaiKolom) {
+        namaPilihan = normalisasiNama(req.body.station);
+        if (!namaPilihan) {
+          return res.status(400).json({
+            error: `Pilih stasiun tujuan, atau sertakan kolom "${KOLOM_STASIUN}" di berkas`,
+          });
+        }
+        if (!terdaftar.has(namaPilihan)) {
+          return res.status(400).json({
+            error: `Stasiun tidak dikenal: ${req.body.station}`,
+            stasiunValid: [...terdaftar],
+          });
+        }
+      }
+
+      // Pisahkan baris valid dari yang tanggal/stasiunnya rusak, lalu laporkan
       // keduanya. Baris rusak dilewati, bukan ditambal.
       const valid = [];
       const dilewati = [];
+      const duplikat = [];
+      const barisPertama = new Map(); // "stasiun|waktu" -> nomor baris
 
       rows.forEach((row, i) => {
+        const baris = i + 2;
+        const nama = pakaiKolom ? normalisasiNama(row[KOLOM_STASIUN]) : namaPilihan;
+        if (!nama) {
+          dilewati.push({ baris, alasan: "Nama stasiun kosong", nilai: "" });
+          return;
+        }
         const tanggal = parseTanggal(row["Date"]);
         if (!tanggal) {
-          dilewati.push({
-            baris: i + 2,
-            alasan: "Tanggal tidak valid",
-            nilai: String(row["Date"]),
+          dilewati.push({ baris, alasan: "Tanggal tidak valid", nilai: String(row["Date"]) });
+          return;
+        }
+
+        const kunci = `${nama}|${tanggal.getTime()}`;
+        if (barisPertama.has(kunci)) {
+          duplikat.push({
+            baris,
+            sama: barisPertama.get(kunci),
+            stasiun: nama,
+            tanggal: tanggal.toISOString().slice(0, 10),
           });
           return;
         }
-        const entri = { NAMA_STASIUN: namaStasiun, TANGGAL: tanggal, _baris: i + 2 };
+        barisPertama.set(kunci, baris);
+
+        const entri = { NAMA_STASIUN: nama, TANGGAL: tanggal, _baris: baris };
         KODE_FIELD.forEach((k) => { entri[k] = parseAngka(row[k]); });
         valid.push(entri);
       });
 
+      // Stasiun + tanggal yang sama dua kali berarti isi berkas ambigu: nilai
+      // mana yang benar tidak bisa ditebak, dan upsert akan diam-diam menimpa.
+      // Kasus paling umum: berkas multi-stasiun tanpa kolom "Stasiun".
+      if (duplikat.length) {
+        return res.status(400).json({
+          error: `Upload dibatalkan: ${duplikat.length} baris memiliki stasiun dan tanggal ` +
+            `yang sama dengan baris lain` +
+            (pakaiKolom ? "" : `. Bila berkas berisi beberapa stasiun, tambahkan kolom "${KOLOM_STASIUN}"`),
+          barisDuplikat: duplikat.slice(0, 20),
+          totalDuplikat: duplikat.length,
+        });
+      }
+
       if (!valid.length) {
         return res.status(400).json({
-          error: "Tidak ada baris dengan tanggal yang valid",
+          error: "Tidak ada baris dengan tanggal dan stasiun yang valid",
           barisDilewati: dilewati.slice(0, 20),
           totalDilewati: dilewati.length,
         });
@@ -209,13 +296,50 @@ exports.uploadExcel = [
         { ordered: false }
       );
 
+      // Ringkasan per stasiun, sekaligus daftar stasiun yang ikut diunggah.
+      const perStasiun = new Map();
+      valid.forEach((e) => {
+        const t = e.TANGGAL.getTime();
+        const s = perStasiun.get(e.NAMA_STASIUN);
+        if (!s) perStasiun.set(e.NAMA_STASIUN, { baris: 1, dari: t, sampai: t });
+        else {
+          s.baris += 1;
+          s.dari = Math.min(s.dari, t);
+          s.sampai = Math.max(s.sampai, t);
+        }
+      });
+
+      // Daftarkan stasiun dari kolom beserta metadata lokasinya. Stasiun yang
+      // belum terdaftar dilaporkan agar salah ketik nama cepat ketahuan.
+      if (pakaiKolom) {
+        const meta = bacaMetadataStasiun(workbook, rows);
+        await Stasiun.bulkWrite(
+          [...perStasiun.keys()].map((nama) => ({
+            updateOne: {
+              filter: { NAMA: nama },
+              update: { $set: { NAMA: nama, ...meta.get(nama) } },
+              upsert: true,
+            },
+          })),
+          { ordered: false }
+        );
+      }
+
       const waktu = valid.map((e) => e.TANGGAL.getTime());
       const ditambah = hasil.upsertedCount || 0;
       const diperbarui = hasil.modifiedCount || 0;
+      const namaStasiun = [...perStasiun.keys()].sort();
 
       res.status(200).json({
-        message: `Upload berhasil. ${ditambah} data baru, ${diperbarui} data diperbarui.`,
+        message: `Upload berhasil. ${ditambah} data baru, ${diperbarui} data diperbarui` +
+          (namaStasiun.length > 1 ? ` dari ${namaStasiun.length} stasiun.` : "."),
         stasiun: namaStasiun,
+        sumberStasiun: pakaiKolom ? "kolom" : "pilihan",
+        stasiunBaru: namaStasiun.filter((n) => !terdaftar.has(n)),
+        perStasiun: namaStasiun.map((n) => {
+          const s = perStasiun.get(n);
+          return { stasiun: n, baris: s.baris, dari: tanggalUkur(s.dari), sampai: tanggalUkur(s.sampai) };
+        }),
         tanggalUpload: tanggalIndonesia(),
         rentangData: {
           dari: tanggalUkur(Math.min(...waktu)),
@@ -595,9 +719,15 @@ exports.exportPDF = async (req, res) => {
 
 exports.getStationNames = async (req, res) => {
   try {
-    const stations = await Iklim.distinct("NAMA_STASIUN");
+    // stations: nama yang punya data, untuk filter. detail: seluruh stasiun
+    // terdaftar beserta metadata lokasinya, termasuk yang belum punya data.
+    const [stations, detail] = await Promise.all([
+      Iklim.distinct("NAMA_STASIUN"),
+      daftarStasiun(),
+    ]);
     res.status(200).json({
       stations: stations.sort(),
+      detail,
       info: {
         lastUpdated: tanggalIndonesia(),
         totalStations: stations.length,

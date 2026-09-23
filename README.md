@@ -112,6 +112,7 @@ lewat body request.
 
 | Kolom | Wajib | Keterangan |
 |---|:---:|---|
+| `Stasiun` |, | Nama stasiun per baris. Bila ada, satu berkas boleh berisi banyak stasiun |
 | `Date` | ✅ | Tanggal (format Excel date atau teks yang bisa diparse) |
 | `TN` `TX` `TM` | ✅ | Suhu min / maks / rata-rata (°C) |
 | `UN` `UX` `UM` |, | Kelembapan min / maks / rata-rata (%) |
@@ -137,8 +138,19 @@ Aturan tata letak:
   melebihi 100. Nilai di luar aturan ini tetap tersimpan, tapi akan muncul
   sebagai temuan di halaman Mutu.
 
+**Berkas banyak stasiun:** tambahkan kolom `Stasiun` di sheet data. Stasiun
+yang belum terdaftar otomatis didaftarkan dan dilaporkan sebagai "baru" di
+hasil unggah, supaya salah ketik nama cepat ketahuan. Metadata lokasi boleh
+ditaruh di sheet bernama `Stasiun` dengan kolom `Stasiun, Wilayah, Tipe,
+Lintang, Bujur, Elevasi_m`, atau sebagai kolom yang sama di sheet data.
+Koordinat disimpan sekali per stasiun di koleksi `Stasiun`, bukan per baris.
+
 **Catatan penting:**
-- Nama stasiun diambil dari **dropdown**, bukan dari nama file.
+- Tanpa kolom `Stasiun`, nama stasiun diambil dari **dropdown**, bukan dari
+  nama file. Dropdown hanya menerima stasiun yang sudah terdaftar.
+- Bila stasiun dan tanggal yang sama muncul lebih dari sekali, **seluruh unggahan
+  dibatalkan**. Ini menangkap berkas multi-stasiun yang lupa diberi kolom
+  `Stasiun`, yang kalau diteruskan akan saling menimpa tanpa ketahuan.
 - Baris dengan tanggal tidak valid **dilewati dan dilaporkan**, tidak lagi
   diisi tanggal hari ini.
 - Upload ulang periode yang sama akan **memperbarui** data lama. Kombinasi
@@ -156,7 +168,8 @@ backend/
   server.js               Koneksi MongoDB + listen
   lib/iklimFormat.js      Definisi variabel iklim (dipakai export Excel & PDF)
   middleware/auth.js      Verifikasi JWT + requireRole
-  models/                 Skema Mongoose
+  lib/stasiun.js          Stasiun bawaan + gabungan daftar stasiun terdaftar
+  models/                 Skema Mongoose (Iklim, Stasiun, User)
   controllers/            Logika upload, cari, export
   routes/                 Definisi endpoint
   scripts/

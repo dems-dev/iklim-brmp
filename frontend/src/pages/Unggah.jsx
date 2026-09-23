@@ -1,23 +1,26 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import api, { pesanError } from "../lib/api";
 import { PageHead } from "../components/Shell";
 import { Button, Field, Select, Panel, Badge, EmptyState } from "../components/ui";
 
-const STASIUN = [
-  "AWS KP Pacet",
-  "AWS KP Pakuwon",
-  "AWS KP Cimanggu",
-  "AWS KP Muara",
-];
-
 export default function Unggah() {
   const [file, setFile] = useState(null);
+  const [daftarStasiun, setDaftarStasiun] = useState([]);
   const [stasiun, setStasiun] = useState("");
   const [modeKetat, setModeKetat] = useState(true);
   const [loading, setLoading] = useState(false);
   const [hasil, setHasil] = useState(null); // { sukses, pesan, data }
   const [seret, setSeret] = useState(false);
   const inputRef = useRef(null);
+
+  const muatStasiun = () =>
+    api.get("/iklim/stations")
+      .then((r) => setDaftarStasiun(r.data.detail || []))
+      .catch(() => {});
+
+  useEffect(() => {
+    muatStasiun();
+  }, []);
 
   const pilihFile = (f) => {
     if (!f) return;
@@ -30,10 +33,6 @@ export default function Unggah() {
   };
 
   const kirim = async () => {
-    if (!stasiun) {
-      setHasil({ sukses: false, pesan: "Pilih stasiun tujuan terlebih dahulu" });
-      return;
-    }
     if (!file) {
       setHasil({ sukses: false, pesan: "Pilih berkas terlebih dahulu" });
       return;
@@ -41,7 +40,7 @@ export default function Unggah() {
 
     const fd = new FormData();
     fd.append("file", file);
-    fd.append("station", stasiun);
+    if (stasiun) fd.append("station", stasiun);
     fd.append("strict", String(modeKetat));
 
     setLoading(true);
@@ -49,6 +48,7 @@ export default function Unggah() {
     try {
       const { data } = await api.post("/iklim/upload", fd);
       setHasil({ sukses: true, pesan: data.message, data });
+      if (data.stasiunBaru?.length) muatStasiun();
     } catch (err) {
       setHasil({
         sukses: false,
@@ -72,10 +72,16 @@ export default function Unggah() {
           <div className="bg-panel border border-rule rounded-card px-3.5 py-3 mb-3">
             <Field label="Stasiun tujuan" className="max-w-[280px]">
               <Select value={stasiun} onChange={(e) => setStasiun(e.target.value)}>
-                <option value="">Pilih stasiun,</option>
-                {STASIUN.map((s) => <option key={s} value={s}>{s}</option>)}
+                <option value="">Dari kolom Stasiun di berkas</option>
+                {daftarStasiun.map((s) => (
+                  <option key={s.NAMA} value={s.NAMA}>{s.LABEL || s.NAMA}</option>
+                ))}
               </Select>
             </Field>
+            <p className="m-0 mt-1.5 text-[11px] text-ink-3">
+              Berkas satu stasiun tanpa kolom <span className="num">Stasiun</span> wajib memilih
+              stasiun di sini. Berkas dengan kolom itu boleh berisi banyak stasiun.
+            </p>
           </div>
 
           {/* ------------------------------------------------ area jatuhkan */}
@@ -177,6 +183,44 @@ export default function Unggah() {
                 </div>
               )}
 
+              {d?.perStasiun?.length > 1 && (
+                <div className="max-h-[200px] overflow-y-auto border-b border-rule">
+                  {d.perStasiun.map((s) => (
+                    <div key={s.stasiun} className="flex items-center gap-2.5 px-4 py-2 border-b border-rule last:border-b-0 text-[12px]">
+                      <span className="font-semibold min-w-0 truncate">{s.stasiun}</span>
+                      {d.stasiunBaru?.includes(s.stasiun) && <Badge tone="warn">baru</Badge>}
+                      <span className="ml-auto num text-[11.5px] text-ink-3 shrink-0">
+                        {s.baris} baris · {s.dari} – {s.sampai}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {d?.stasiunBaru?.length > 0 && (
+                <div className="px-4 py-2.5 text-[11.5px] text-ink-2 border-b border-rule">
+                  {d.stasiunBaru.length} stasiun baru didaftarkan:{" "}
+                  <span className="num">{d.stasiunBaru.join(", ")}</span>. Bila ada yang tidak
+                  dikenal, periksa ejaan nama di berkas.
+                </div>
+              )}
+
+              {d?.barisDuplikat?.length > 0 && (
+                <div className="px-4 py-3 border-b border-rule">
+                  <div className="label-caps mb-2">Stasiun dan tanggal ganda</div>
+                  {d.barisDuplikat.map((b, i) => (
+                    <div key={i} className="text-[11.5px] text-crit">
+                      Baris {b.baris} sama dengan baris {b.sama} ({b.stasiun}, {b.tanggal})
+                    </div>
+                  ))}
+                  {d.totalDuplikat > d.barisDuplikat.length && (
+                    <div className="text-[11.5px] text-ink-3 mt-1">
+                      +{d.totalDuplikat - d.barisDuplikat.length} baris lainnya
+                    </div>
+                  )}
+                </div>
+              )}
+
               {d?.kolomYangDitemukan && (
                 <div className="px-4 py-2.5 text-[11.5px] text-ink-2 border-b border-rule">
                   Kolom terbaca: <span className="num">{d.kolomYangDitemukan.join(", ")}</span>
@@ -204,7 +248,7 @@ export default function Unggah() {
 
               {d?.barisDilewati?.length > 0 && (
                 <div className="px-4 py-3 border-t border-rule">
-                  <div className="label-caps mb-2">Baris dilewati, tanggal tidak valid</div>
+                  <div className="label-caps mb-2">Baris dilewati</div>
                   {d.barisDilewati.map((b, i) => (
                     <div key={i} className="text-[11.5px] text-warn">
                       Baris {b.baris}: {b.alasan} (&ldquo;{b.nilai}&rdquo;)
@@ -229,8 +273,13 @@ export default function Unggah() {
               <p className="m-0 mb-2">
                 Opsional: <span className="num">UN, UX, UM, RR, GIX, VT, RG</span>
               </p>
+              <p className="m-0 mb-2">
+                Banyak stasiun: tambahkan kolom <span className="num text-ink">Stasiun</span>.
+                Koordinat boleh ditaruh di sheet <span className="num">Stasiun</span>
+                {" "}(<span className="num">Wilayah, Tipe, Lintang, Bujur, Elevasi_m</span>).
+              </p>
               <p className="m-0 text-ink-3">
-                Nama stasiun diambil dari pilihan di atas, bukan dari nama berkas.
+                Nama stasiun tidak pernah diambil dari nama berkas.
               </p>
             </div>
           </Panel>
