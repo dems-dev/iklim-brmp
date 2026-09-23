@@ -532,12 +532,3 @@ wajib mengisi email.
 
 ### Belum ada test otomatis
 `npm test` di backend masih placeholder.
-
----
-
-## Kredit
-
-Versi awal proyek dikerjakan oleh [@boyjambre](https://github.com/boyjambre)
-di [boyjambre/Project_BRMP](https://github.com/boyjambre/Project_BRMP).
-Repositori ini melanjutkannya dengan perombakan backend, antarmuka, validasi
-mutu data, dan penyiapan deploy.
